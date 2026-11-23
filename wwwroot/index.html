@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Enterprise DLL Analyzer</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#121a2c;--line:#29364d;--text:#e8eef8;--muted:#9aabc2;--blue:#2864b5}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px Segoe UI,Arial}
+header{padding:18px 24px;border-bottom:1px solid var(--line);background:#0e1627;font-size:18px;font-weight:700}
+main{max-width:1440px;margin:auto;padding:24px}.bar,.panel,.metric{background:var(--panel);border:1px solid var(--line);border-radius:10px}
+.bar{padding:16px;display:flex;gap:10px;align-items:end}label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}
+input{width:100%;padding:11px;background:#091321;border:1px solid var(--line);border-radius:6px;color:var(--text)}
+.bar div{flex:1}button{background:var(--blue);color:white;border:0;border-radius:6px;padding:11px 15px;cursor:pointer}
+.grid{display:grid;grid-template-columns:310px 1fr;gap:14px;margin-top:15px}.panel h3{padding:14px;margin:0;border-bottom:1px solid var(--line)}
+.panel-body{padding:14px}.tree{max-height:600px;overflow:auto}.tree button{display:block;width:100%;text-align:left;background:transparent;color:var(--text);padding:8px}
+.tree button:hover{background:#202d43}pre{white-space:pre-wrap;overflow:auto;background:#080e19;padding:15px;border-radius:7px;min-height:440px;max-height:650px;font:12px/1.6 Consolas,monospace}
+.tabs{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px}.tabs button{background:#26364e}.tabs button.active{background:var(--blue)}
+.metrics{display:flex;gap:10px;margin:15px 0;flex-wrap:wrap}.metric{padding:12px 16px;min-width:140px}.metric b{display:block;font-size:20px}.muted,#status{color:var(--muted)}
+@media(max-width:800px){.grid{grid-template-columns:1fr}.bar{display:block}.bar button{margin-top:10px}}
+</style></head><body>
+<header>EDA · Enterprise DLL Analyzer <span class="muted" style="font-size:12px;font-weight:400">— Local static analysis</span></header>
+<main>
+<div class="bar"><div><label>Local .NET DLL / EXE path</label><input id="path" placeholder="C:\Apps\MyLibrary.dll"></div><button id="analyze">Analyze</button></div>
+<p id="status">Listening on localhost only. Enter a local assembly path.</p>
+<div class="metrics"><div class="metric">Assembly<b id="assembly">—</b></div><div class="metric">Types<b id="types">—</b></div><div class="metric">References<b id="refs">—</b></div><div class="metric">Size<b id="size">—</b></div></div>
+<div class="grid"><section class="panel"><h3>Assembly Explorer</h3><div class="panel-body tree" id="tree">No assembly loaded.</div></section>
+<section class="panel"><h3>Analysis workspace</h3><div class="panel-body">
+<div class="tabs"><button class="active" data-tab="source">C# Source</button><button data-tab="references">References</button><button data-tab="il">Method IL</button><button data-tab="search">Search</button><button data-tab="export">Export</button></div>
+<div id="sourceBox"><label>Selected type</label><input id="selectedType" readonly></div>
+<div id="ilBox" hidden><label>Method name</label><input id="method" placeholder="MethodName"><button id="readIl">Disassemble IL</button><button id="typeDetails">Inspect members</button><button id="callers">Find callers</button></div>
+<div id="searchBox" hidden><label>Search source</label><input id="query" placeholder="SQL, method or identifier"><button id="search">Search</button></div>
+<div id="exportBox" hidden><label>Output directory</label><input id="output" placeholder="C:\EDA-Exports"><button id="export">Export C# source</button></div>
+<pre id="viewer">// Results appear here.</pre></div></section></div>
+<section class="panel" style="margin-top:15px"><h3>Phase 2 · Publish-folder dependency analysis</h3><div class="panel-body"><label>Published application folder (containing DLL / EXE files)</label><div style="display:flex;gap:10px"><input id="publishFolder" placeholder="C:\Apps\MyPublishedApp"><button id="analyzeFolder">Analyze publish folder</button></div><p class="muted">Scans managed assemblies, maps assembly references to files in the publish folder, and reports unresolved references. Framework assemblies may be unresolved when they are supplied by the installed .NET runtime.</p></div></section>
+</main>
+<script>
+let assemblyPath="",selectedType="",analysis=null,tab="source";
+const el=id=>document.getElementById(id);
+async function post(url,data){let r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});let t=await r.text();if(!r.ok)throw Error(t);try{return JSON.parse(t)}catch{return t}}
+function status(s){el("status").textContent=s}
+document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{tab=b.dataset.tab;document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("active",x===b));["source","il","search","export"].forEach(x=>el(x+"Box").hidden=x!==tab);if(tab==="references"&&analysis)el("viewer").textContent=JSON.stringify(analysis.references,null,2)});
+el("analyze").onclick=async()=>{assemblyPath=el("path").value.trim();try{status("Reading PE and CLI metadata…");analysis=await post("/api/inspect",{path:assemblyPath});el("assembly").textContent=analysis.assemblyName;el("types").textContent=analysis.types.length;el("refs").textContent=analysis.references.length;el("size").textContent=(analysis.sizeBytes/1024).toFixed(1)+" KB";let tree=el("tree");tree.innerHTML="";analysis.types.forEach(t=>{let b=document.createElement("button");b.textContent=t.fullName+" ("+t.methods.length+" methods)";b.onclick=()=>loadType(t.fullName);tree.appendChild(b)});el("viewer").textContent="SHA-256: "+analysis.sha256+"\nMVID: "+analysis.mvid+"\nSelect a type to decompile.";status("Analysis complete. The target assembly was not executed.");}catch(e){status("Error: "+e.message)}};
+async function loadType(name){selectedType=name;el("selectedType").value=name;try{status("Decompiling "+name);el("viewer").textContent=await post("/api/decompile/type",{path:assemblyPath,typeName:name});status("Decompilation complete.");}catch(e){status("Error: "+e.message)}}
+el("typeDetails").onclick=async()=>{try{let r=await post("/api/inspect/type",{path:assemblyPath,typeName:selectedType});el("viewer").textContent=JSON.stringify(r,null,2);status("Type members and attributes loaded.");}catch(e){status("Error: "+e.message)}};
+el("callers").onclick=async()=>{try{let r=await post("/api/method/callers",{path:assemblyPath,typeName:selectedType,methodName:el("method").value});el("viewer").textContent=JSON.stringify(r,null,2);status(r.callerCount+" statically visible caller(s) found in the assembly directory.");}catch(e){status("Error: "+e.message)}};
+el("analyzeFolder").onclick=async()=>{try{status("Scanning publish folder and building dependency map…");let r=await post("/api/publish-folder/analyze",{folder:el("publishFolder").value});el("viewer").textContent=JSON.stringify(r,null,2);status(`Scanned ${r.assemblyCount} managed assemblies; ${r.unresolvedReferences.length} unresolved references.`);}catch(e){status("Error: "+e.message)}};
+el("readIl").onclick=async()=>{try{let r=await post("/api/method/il",{path:assemblyPath,typeName:selectedType,methodName:el("method").value});el("viewer").textContent=JSON.stringify(r,null,2);status("Decoded IL instructions retrieved.");}catch(e){status("Error: "+e.message)}};
+el("search").onclick=async()=>{try{let r=await post("/api/search",{path:assemblyPath,query:el("query").value});el("viewer").textContent=JSON.stringify(r,null,2);status(r.count+" matching lines.");}catch(e){status("Error: "+e.message)}};
+el("export").onclick=async()=>{try{let r=await post("/api/export",{path:assemblyPath,outputDirectory:el("output").value});el("viewer").textContent="Exported to: "+r.outputPath;status("Export complete.");}catch(e){status("Error: "+e.message)}};
+</script></body></html>
